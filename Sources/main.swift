@@ -1522,6 +1522,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.labelColor,
             .font: NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular),
+            // The icon sits a touch below the bar's midline; drop the text to share its centre.
+            .baselineOffset: -1.5,
         ]
         button.attributedTitle = NSAttributedString(string: " \(text)", attributes: attrs)
     }
