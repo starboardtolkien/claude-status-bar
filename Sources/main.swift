@@ -940,9 +940,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         // Optional trailing qualifier ("5 min+") pinned just left of the toggle, in the SAME font/size/color
         // and right-alignment as the session-row timer, so the two read as the same kind of trailing note.
         if let qualifier = qualifier {
-            let qW: CGFloat = 74, gap: CGFloat = 8
+            let gap: CGFloat = 8
             let q = NSTextField(labelWithString: qualifier)
             q.font = NSFont.monospacedSystemFont(ofSize: labelFont.pointSize - 2, weight: .regular)
+            let qW = max(74, ceil(q.intrinsicContentSize.width) + 2)  // grow for long values like "$0.00/$50.00"
             q.textColor = .secondaryLabelColor
             q.alignment = .right
             q.frame = NSRect(x: toggleX - gap - qW, y: (height - 16) / 2, width: qW, height: 16)
@@ -1561,7 +1562,9 @@ final class StatusController: NSObject, NSMenuDelegate {
             // Centre the block on the text's x-height so it sits mid-bar like the Stats items.
             att.bounds = CGRect(x: 0, y: (font.xHeight - att.image!.size.height) / 2,
                                 width: att.image!.size.width, height: att.image!.size.height)
-            title.append(NSAttributedString(string: text.isEmpty ? " " : "  ", attributes: attrs))
+            var spacer = attrs
+            if text.isEmpty { spacer[.kern] = 3.75 }  // extra breathing room between the icon and the blocks
+            title.append(NSAttributedString(string: text.isEmpty ? " " : "  ", attributes: spacer))
             title.append(NSAttributedString(attachment: att))
         }
         button.attributedTitle = title
