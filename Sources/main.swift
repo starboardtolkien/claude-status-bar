@@ -537,7 +537,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func usageTitleText() -> String {
         guard anyUsageShown else { return "" }
-        guard let u = usage.snapshot else { return usage.lastError == nil ? "" : "usage ?" }
+        guard let u = usage.snapshot else { return usage.lastError == nil ? "" : "usage …" }
         var parts: [String] = []
         if showUsage5h, let w = u.fiveHour { parts.append("5h \(Int(w.percent.rounded()))%") }
         if showUsage7d, let w = u.sevenDay { parts.append("7d \(Int(w.percent.rounded()))%") }
@@ -802,7 +802,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             UserDefaults.standard.set(on, forKey: "showLabel")
             self?.evaluate()
         })
-        if anyUsageShown, usage.snapshot.map({ Date().timeIntervalSince($0.fetchedAt) > 30 }) ?? true { usage.refresh() }
+        if anyUsageShown, usage.snapshot.map({ Date().timeIntervalSince($0.fetchedAt) > 60 }) ?? true { usage.refresh() }
         let snap = usage.snapshot
         menu.addItem(usageToggle("Show 5h usage", key: "showUsage5h", isOn: showUsage5h,
                                  qualifier: usageQualifier(snap?.fiveHour)) { [weak self] in self?.showUsage5h = $0 })
@@ -813,7 +813,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.addItem(usageToggle("Show usage credits", key: "showUsageCredits", isOn: showUsageCredits,
                                  qualifier: creditsQualifier()) { [weak self] in self?.showUsageCredits = $0 })
         if anyUsageShown, let err = usage.lastError {
-            let it = NSMenuItem(title: "Usage: \(err)", action: nil, keyEquivalent: "")
+            let age = usage.snapshot.map { " (showing \(countdown(Date().timeIntervalSince($0.fetchedAt))) old)" } ?? ""
+            let it = NSMenuItem(title: "Usage: \(err)\(age)", action: nil, keyEquivalent: "")
             it.isEnabled = false
             menu.addItem(it)
         }

@@ -28,15 +28,27 @@ final class UsageMonitor {
     private var timer: Timer?
     private var inFlight = false
     private var backoffUntil = Date.distantPast
+    private var backoff: TimeInterval = 0   // grows on repeated 429s, resets on success
 
     var isRunning: Bool { timer != nil }
+
+    // Last good response, so a relaunch or a failed poll shows the previous numbers, not an error.
+    private let cachePath = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/usage-cache.json")
+
+    init() {
+        if let d = FileManager.default.contents(atPath: cachePath), var snap = UsageMonitor.parse(d) {
+            snap.fetchedAt = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.modificationDate] as? Date) ?? .distantPast
+            snapshot = snap
+        }
+    }
 
     func start() {
         guard timer == nil else { return }
         let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
-        refresh()
+        // A relaunch inside the poll interval reuses the cached numbers instead of spending a request.
+        if snapshot.map({ Date().timeIntervalSince($0.fetchedAt) >= interval }) ?? true { refresh() }
     }
 
     func stop() {
@@ -51,6 +63,7 @@ final class UsageMonitor {
                 DispatchQueue.main.async {
                     self?.inFlight = false
                     self?.lastError = "Not signed in to Claude Code"
+                    NSLog("usage: no token")
                     self?.onUpdate?()
                 }
                 return
@@ -73,18 +86,23 @@ final class UsageMonitor {
     private func handle(data: Data?, resp: HTTPURLResponse?, err: Error?) {
         inFlight = false
         defer { onUpdate?() }
-        if let err = err { lastError = err.localizedDescription; return }
+        if let err = err { lastError = err.localizedDescription; NSLog("usage: %@", err.localizedDescription); return }
         guard let resp = resp else { lastError = "No response"; return }
+        if resp.statusCode != 200 { NSLog("usage: HTTP %d", resp.statusCode) }
         switch resp.statusCode {
         case 200:
             guard let data = data, let snap = UsageMonitor.parse(data) else { lastError = "Unreadable response"; return }
             snapshot = snap
             lastError = nil
+            backoff = 0
+            try? data.write(to: URL(fileURLWithPath: cachePath), options: .atomic)
         case 401, 403:
             lastError = "Claude Code login expired"   // Claude Code refreshes it on its next run
         case 429:
-            let retry = (resp.value(forHTTPHeaderField: "Retry-After")).flatMap(Double.init) ?? 300
-            backoffUntil = Date().addingTimeInterval(retry)
+            backoff = min(max(backoff * 2, 120), 900)
+            let retry = (resp.value(forHTTPHeaderField: "Retry-After")).flatMap(Double.init) ?? backoff
+            backoffUntil = Date().addingTimeInterval(max(retry, interval))
+            NSLog("usage: rate limited, retrying in %.0fs", max(retry, interval))
             lastError = "Rate limited"
         default:
             lastError = "HTTP \(resp.statusCode)"
