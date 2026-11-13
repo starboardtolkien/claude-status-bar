@@ -47,7 +47,7 @@ Everything is controlled from the menu:
 
 - **Show timer:** toggle the elapsed `1m 1s` clock.
 - **Show text:** show the status label next to the icon (`Manifesting…`, `Percolating…`, `Editing`, `Running command`), or turn it off for an icon-only menu bar (on by default).
-- **Show 5h / 7d / 7d Fable usage, Show usage credits:** add your plan usage limits to the menu bar (`5h 23% · 7d 41% · F 12% · $3.20`). Each row in the menu also shows the time to reset. Off by default; read with Claude Code's own login and refreshed every minute while any is on.
+- **Show 5h / 7d / 7d Fable usage, Show usage credits:** add your plan usage limits to the menu bar, each as a small caption over its value (like the Stats app's CPU item). Each row in the menu also shows the time to reset. Off by default; read with Claude Code's own login and refreshed every minute while any is on.
 - **Animation style:**
   - **Spark**, the web/chat "morph" spark
   - **Unicode**, the terminal glyph spinner

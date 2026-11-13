@@ -535,15 +535,41 @@ final class StatusController: NSObject, NSMenuDelegate {
         applyTitle()
     }
 
-    func usageTitleText() -> String {
-        guard anyUsageShown else { return "" }
-        guard let u = usage.snapshot else { return usage.lastError == nil ? "" : "usage …" }
-        var parts: [String] = []
-        if showUsage5h, let w = u.fiveHour { parts.append("5h \(Int(w.percent.rounded()))%") }
-        if showUsage7d, let w = u.sevenDay { parts.append("7d \(Int(w.percent.rounded()))%") }
-        if showUsageFable, let w = u.sevenDayFable { parts.append("F \(Int(w.percent.rounded()))%") }
-        if showUsageCredits, u.creditsEnabled, let used = u.creditsUsed { parts.append(money(used)) }
-        return parts.joined(separator: " · ")
+    // (caption, value) pairs drawn as stacked blocks, small caption over the value.
+    func usageBlocks() -> [(String, String)] {
+        guard anyUsageShown else { return [] }
+        guard let u = usage.snapshot else { return usage.lastError == nil ? [] : [("USAGE", "…")] }
+        func pct(_ w: UsageWindow) -> String { "\(Int(w.percent.rounded()))%" }
+        var out: [(String, String)] = []
+        if showUsage5h, let w = u.fiveHour { out.append(("5 HOUR", pct(w))) }
+        if showUsage7d, let w = u.sevenDay { out.append(("7 DAY", pct(w))) }
+        if showUsageFable, let w = u.sevenDayFable { out.append(("FABLE", pct(w))) }
+        if showUsageCredits, u.creditsEnabled, let used = u.creditsUsed { out.append(("CREDITS", money(used))) }
+        return out
+    }
+
+    // Renders the blocks the way Stats draws its CPU/RAM items. Drawn lazily so labelColor
+    // resolves against the menu bar's current appearance.
+    func usageImage(_ blocks: [(String, String)]) -> NSImage {
+        let capFont = NSFont.systemFont(ofSize: 7, weight: .regular)
+        let valFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        let gap: CGFloat = 10, height: CGFloat = 22
+        let widths = blocks.map { b in
+            ceil(max((b.0 as NSString).size(withAttributes: [.font: capFont]).width,
+                     (b.1 as NSString).size(withAttributes: [.font: valFont]).width))
+        }
+        let width = widths.reduce(0, +) + gap * CGFloat(max(0, blocks.count - 1))
+        return NSImage(size: NSSize(width: max(1, width), height: height), flipped: true) { _ in
+            let cap: [NSAttributedString.Key: Any] = [.font: capFont, .foregroundColor: NSColor.labelColor]
+            let val: [NSAttributedString.Key: Any] = [.font: valFont, .foregroundColor: NSColor.labelColor]
+            var x: CGFloat = 0
+            for (i, b) in blocks.enumerated() {
+                (b.0 as NSString).draw(at: NSPoint(x: x, y: 1), withAttributes: cap)
+                (b.1 as NSString).draw(at: NSPoint(x: x, y: 7), withAttributes: val)
+                x += widths[i] + gap
+            }
+            return true
+        }
     }
 
     // Trailing note on each usage toggle: current value plus time to reset.
@@ -1504,15 +1530,16 @@ final class StatusController: NSObject, NSMenuDelegate {
             let clock = elapsed(max(0, Int(Date().timeIntervalSince1970 - startedAt)))
             text = text.isEmpty ? clock : text + "  " + clock
         }
-        let usageText = usageTitleText()
-        if !usageText.isEmpty { text = text.isEmpty ? usageText : text + "  " + usageText }
+        let blocks = usageBlocks()
+        let blockKey = blocks.map { $0.0 + "=" + $0.1 }.joined(separator: ";")
+        let key = text + "|" + blockKey + "|" + button.effectiveAppearance.name.rawValue
         // Assigning attributedTitle re-shapes the string through CoreText and re-snapshots the
         // status item bitmap, so at animation fps an unchanged title costs a full redraw per frame
         // (the clock only ticks at 1 Hz). labelColor is dynamic and resolves at draw, so skipping
         // the assignment still tracks light/dark menu bars.
-        guard text != lastTitleText else { return }
-        lastTitleText = text
-        if text.isEmpty {
+        guard key != lastTitleText else { return }
+        lastTitleText = key
+        if text.isEmpty && blocks.isEmpty {
             button.imagePosition = .imageOnly
             button.attributedTitle = NSAttributedString(string: "")
             return
@@ -1526,7 +1553,18 @@ final class StatusController: NSObject, NSMenuDelegate {
             // The icon sits a touch below the bar's midline; drop the text to share its centre.
             .baselineOffset: -1.5,
         ]
-        button.attributedTitle = NSAttributedString(string: " \(text)", attributes: attrs)
+        let title = NSMutableAttributedString(string: text.isEmpty ? "" : " \(text)", attributes: attrs)
+        if !blocks.isEmpty {
+            let att = NSTextAttachment()
+            att.image = usageImage(blocks)
+            let font = attrs[.font] as! NSFont
+            // Centre the block on the text's x-height so it sits mid-bar like the Stats items.
+            att.bounds = CGRect(x: 0, y: (font.xHeight - att.image!.size.height) / 2,
+                                width: att.image!.size.width, height: att.image!.size.height)
+            title.append(NSAttributedString(string: text.isEmpty ? " " : "  ", attributes: attrs))
+            title.append(NSAttributedString(attachment: att))
+        }
+        button.attributedTitle = title
     }
 
     // MARK: icon
