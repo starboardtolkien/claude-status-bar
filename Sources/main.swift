@@ -385,6 +385,13 @@ final class StatusController: NSObject, NSMenuDelegate {
     var showTimer = false
     var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
     var showLabel = true
+    // Plan-usage metrics appended to the menu bar title, each toggled on its own.
+    let usage = UsageMonitor()
+    var showUsage5h = false
+    var showUsage7d = false
+    var showUsageFable = false
+    var showUsageCredits = false
+    var anyUsageShown: Bool { showUsage5h || showUsage7d || showUsageFable || showUsageCredits }
     var sessionWord: [String: String] = [:] // id -> current thinking word; re-picked on each entry into "thinking"
     var soundThreshold: Double = 0  // 0 = off; else the min turn length (seconds) that chimes on completion
     var turnStart: [String: Double] = [:]  // id -> active turn start, for the completion-sound length gate
@@ -499,6 +506,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         if d.object(forKey: "showLabel") != nil { showLabel = d.bool(forKey: "showLabel") }
         if d.object(forKey: "soundThreshold") != nil { soundThreshold = d.double(forKey: "soundThreshold") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
+        showUsage5h = d.bool(forKey: "showUsage5h")
+        showUsage7d = d.bool(forKey: "showUsage7d")
+        showUsageFable = d.bool(forKey: "showUsageFable")
+        showUsageCredits = d.bool(forKey: "showUsageCredits")
+        usage.onUpdate = { [weak self] in self?.lastTitleText = nil; self?.applyTitle() }
         loadMarkConfig()
         let menu = NSMenu()
         menu.delegate = self
@@ -513,6 +525,60 @@ final class StatusController: NSObject, NSMenuDelegate {
         removeOldNamedBundle()
         ensureHooksInstalled()
         checkForUpdate()
+        syncUsageMonitor()
+    }
+
+    // Poll only while some metric is on; the menu reads the last snapshot.
+    func syncUsageMonitor() {
+        if anyUsageShown { usage.start() } else { usage.stop() }
+        lastTitleText = nil
+        applyTitle()
+    }
+
+    func usageTitleText() -> String {
+        guard anyUsageShown else { return "" }
+        guard let u = usage.snapshot else { return usage.lastError == nil ? "" : "usage ?" }
+        var parts: [String] = []
+        if showUsage5h, let w = u.fiveHour { parts.append("5h \(Int(w.percent.rounded()))%") }
+        if showUsage7d, let w = u.sevenDay { parts.append("7d \(Int(w.percent.rounded()))%") }
+        if showUsageFable, let w = u.sevenDayFable { parts.append("F \(Int(w.percent.rounded()))%") }
+        if showUsageCredits, u.creditsEnabled, let used = u.creditsUsed { parts.append(money(used)) }
+        return parts.joined(separator: " · ")
+    }
+
+    // Trailing note on each usage toggle: current value plus time to reset.
+    func usageQualifier(_ w: UsageWindow?) -> String? {
+        guard let w = w else { return usage.snapshot == nil ? nil : "n/a" }
+        var q = "\(Int(w.percent.rounded()))%"
+        if let r = w.resetsAt { q += " " + countdown(r.timeIntervalSinceNow) }
+        return q
+    }
+
+    func creditsQualifier() -> String? {
+        guard let u = usage.snapshot else { return nil }
+        guard u.creditsReported else { return "n/a" }
+        guard u.creditsEnabled, let used = u.creditsUsed else { return "off" }
+        if let limit = u.creditsLimit, limit > 0 { return money(used) + "/" + money(limit) }
+        return money(used)
+    }
+
+    func money(_ v: Double) -> String {
+        v >= 100 ? String(format: "$%.0f", v) : String(format: "$%.2f", v)
+    }
+
+    func countdown(_ secs: TimeInterval) -> String {
+        let m = max(0, Int(secs) / 60)
+        if m >= 1440 { return "\(m / 1440)d\(m % 1440 / 60)h" }
+        if m >= 60 { return "\(m / 60)h\(m % 60)m" }
+        return "\(m)m"
+    }
+
+    func usageToggle(_ title: String, key: String, isOn: Bool, qualifier: String?, set: @escaping (Bool) -> Void) -> NSMenuItem {
+        toggleRow(title: title, qualifier: anyUsageShown ? qualifier : nil, isOn: isOn) { [weak self] on in
+            set(on)
+            UserDefaults.standard.set(on, forKey: key)
+            self?.syncUsageMonitor()
+        }
     }
 
     // 0.4.0 rename transition ("ClaudeStatusBar.app" to "Claude Status Bar.app"): Finder won't
@@ -736,6 +802,21 @@ final class StatusController: NSObject, NSMenuDelegate {
             UserDefaults.standard.set(on, forKey: "showLabel")
             self?.evaluate()
         })
+        if anyUsageShown, usage.snapshot.map({ Date().timeIntervalSince($0.fetchedAt) > 30 }) ?? true { usage.refresh() }
+        let snap = usage.snapshot
+        menu.addItem(usageToggle("Show 5h usage", key: "showUsage5h", isOn: showUsage5h,
+                                 qualifier: usageQualifier(snap?.fiveHour)) { [weak self] in self?.showUsage5h = $0 })
+        menu.addItem(usageToggle("Show 7d usage", key: "showUsage7d", isOn: showUsage7d,
+                                 qualifier: usageQualifier(snap?.sevenDay)) { [weak self] in self?.showUsage7d = $0 })
+        menu.addItem(usageToggle("Show 7d Fable usage", key: "showUsageFable", isOn: showUsageFable,
+                                 qualifier: usageQualifier(snap?.sevenDayFable)) { [weak self] in self?.showUsageFable = $0 })
+        menu.addItem(usageToggle("Show usage credits", key: "showUsageCredits", isOn: showUsageCredits,
+                                 qualifier: creditsQualifier()) { [weak self] in self?.showUsageCredits = $0 })
+        if anyUsageShown, let err = usage.lastError {
+            let it = NSMenuItem(title: "Usage: \(err)", action: nil, keyEquivalent: "")
+            it.isEnabled = false
+            menu.addItem(it)
+        }
 
         let animParent = NSMenuItem(title: "Animation", action: nil, keyEquivalent: "")
         let animSub = NSMenu()
@@ -1422,6 +1503,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             let clock = elapsed(max(0, Int(Date().timeIntervalSince1970 - startedAt)))
             text = text.isEmpty ? clock : text + "  " + clock
         }
+        let usageText = usageTitleText()
+        if !usageText.isEmpty { text = text.isEmpty ? usageText : text + "  " + usageText }
         // Assigning attributedTitle re-shapes the string through CoreText and re-snapshots the
         // status item bitmap, so at animation fps an unchanged title costs a full redraw per frame
         // (the clock only ticks at 1 Hz). labelColor is dynamic and resolves at draw, so skipping
